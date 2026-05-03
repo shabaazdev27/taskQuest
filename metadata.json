@@ -1,0 +1,15 @@
+{
+  "name": "TaskQuest: The Gamified Workflow Platform",
+  "description": "A highly interactive and playful task management application with real-time collaboration, chat, and analytics, designed to turn your daily grind into an engaging adventure.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "real-time-chat",
+    "gamified-tasks",
+    "analytics-dashboard",
+    "collaborative-teams"
+  ]
+}

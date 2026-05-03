@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Phase 4: Entity Validators
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'xp', 'level']) &&
+             data.uid == request.auth.uid &&
+             data.email is string &&
+             data.xp is int &&
+             data.level is int &&
+             data.xp >= 0 &&
+             data.level >= 1 &&
+             (!('settings' in data) || data.settings is map) &&
+             (!('stats' in data) || data.stats is map);
+    }
+
+    function isValidQuest(data) {
+      return data.keys().hasAll(['title', 'creatorId', 'status', 'xpReward']) &&
+             data.title is string && data.title.size() <= 200 &&
+             data.creatorId == request.auth.uid &&
+             data.status in ['Active', 'Completed', 'Failed', 'OnHold'] &&
+             data.xpReward is int && data.xpReward >= 0 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 2000)) &&
+             (!('category' in data) || data.category in ['Main', 'Side', 'Daily', 'Event']) &&
+             (!('priority' in data) || data.priority in ['Low', 'Medium', 'High', 'Epic']) &&
+             (!('assignees' in data) || data.assignees is list);
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['senderId', 'text', 'type', 'createdAt']) &&
+             data.senderId == request.auth.uid &&
+             data.text is string && data.text.size() <= 5000 &&
+             data.type in ['text', 'image', 'file'] &&
+             data.createdAt is string;
+    }
+
+    // 1. Users
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) && (
+        // Allow updating XP, stats, and settings
+        incoming().diff(existing()).affectedKeys().hasOnly(['xp', 'level', 'stats', 'settings', 'displayName', 'photoURL', 'bio'])
+      );
+    }
+
+    // 2. Quests
+    match /quests/{questId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && resource.data.creatorId == request.auth.uid;
+      allow create: if isSignedIn() && isValidQuest(incoming()) && isValidId(questId);
+      allow update: if isSignedIn() && (
+        (isOwner(existing().creatorId) && isValidQuest(incoming()) && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'status', 'category', 'priority', 'deadline', 'updatedAt'])) ||
+        (request.auth.uid in existing().assignees && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+      );
+      allow delete: if isSignedIn() && isOwner(existing().creatorId);
+    }
+
+    // 3. Messages (Global Chat)
+    match /global_chat/{messageId} {
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidMessage(incoming());
+      // No updates or deletes for chat history for now
+    }
+
+    // 4. Team Messages
+    match /teams/{teamId}/messages/{messageId} {
+      allow list: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/teams/$(teamId)).data.members;
+      allow create: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/teams/$(teamId)).data.members && isValidMessage(incoming());
+    }
+
+    // 5. Teams
+    match /teams/{teamId} {
+      allow get: if isSignedIn() && request.auth.uid in resource.data.members;
+      allow create: if isSignedIn() && incoming().creatorId == request.auth.uid && incoming().members.hasAll([request.auth.uid]);
+      allow update: if isSignedIn() && isOwner(existing().creatorId);
+    }
+  }
+}
